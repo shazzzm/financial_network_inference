@@ -1,13 +1,13 @@
 import ctypes
 import numpy as np
 from numpy.ctypeslib import ndpointer
-import space_r
 from sklearn.preprocessing import StandardScaler
 from joblib import Parallel, delayed
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import KFold, TimeSeriesSplit
 from scipy.stats import norm
 import sklearn.datasets
+import space_r
 
 class SPACE():
     """
@@ -19,7 +19,7 @@ class SPACE():
         self.l1_reg_ctype = ctypes.c_float(self.l1_reg)
         self.l2_reg_ctype = ctypes.c_float(self.l2_reg)
 
-        self.sig = sig
+        self.sig_ = sig
         self.weight = weight
 
         self.lib = ctypes.CDLL("jsrm.so")   
@@ -36,7 +36,8 @@ class SPACE():
         n, p = X.shape
         n_in = ctypes.c_int(n)
         p_in = ctypes.c_int(p)
-        sigma_sr = self.sig.astype(np.float32)
+        #self.sig = np.array(self.sig)
+        sigma_sr = np.sqrt(self.sig_).astype(np.float32)
         n_iter = ctypes.c_int(100)
         iter_count = ctypes.c_int(0)
         beta = np.zeros(p**2, dtype=np.float32)
@@ -56,28 +57,21 @@ class SPACE():
     def fit(self, X ,iter=2):
         n, p = X.shape
         update_sig = False
-        if self.sig is None:
+        if self.sig_ is None:
             update_sig = True
-            self.sig = np.ones(p, dtype=np.float32)
-
-        update_weight = False
-        if self.weight is None:
-            update_weight = False
-            self.weight = np.ones(p, dtype=np.float32)
+            self.sig_ = np.ones(p, dtype=np.float32)
 
         for i in range(iter):
             space_prec = self.run_jsrm(X)
             np.fill_diagonal(space_prec, 1)
             ind = np.triu_indices(p)
             coef = space_prec[ind]
-            beta = self.Beta_coef(coef, self.sig)
+            beta = self.Beta_coef(coef, self.sig_)
         
-        
-            if not update_sig and not update_weight:
+            if not update_sig:
                 break
             else: ## update sig or weight
-                if update_sig:
-                    self.sig = self.InvSig(X, beta)   
+                self.sig_ = self.InvSig(X, beta)   
             ### end updating WEIGHT and SIG
         ### end iteration
 
@@ -92,7 +86,7 @@ class SPACE():
         np.fill_diagonal(beta, 0)
         X_hat = X @ beta
         residue = X - X_hat
-        result = (1/n) * np.power(residue, 2).sum(axis=0)
+        result = np.power(residue, 2).mean(axis=0)
         return np.reciprocal(result)
 
     def Beta_coef(self, coef, sig):
@@ -105,97 +99,12 @@ class SPACE():
 
         result[ind] = coef
         result = result + result.T
-        diag_sig_sqrt = np.diag(np.reciprocal(np.sqrt(sig)))
-        result = diag_sig_sqrt @ result @ diag_sig_sqrt
+        reciprocal_diag_sig_sqrt = np.diag(np.reciprocal(np.sqrt(sig)))
+        diag_sig_sqrt = np.diag(np.sqrt(sig))
+        result = reciprocal_diag_sig_sqrt @ result @ diag_sig_sqrt
         result = result.T 
         return result.astype(np.float32)
-    
-class SPACECV():
-    """
-    SPACE with cross validation to select the L1 regularization parameter
-    """
-
-    def __init__(self, n_folds=4, l2_reg=0, time_series=False, alphas=None, verbose=False):
-        self.n_folds = n_folds
-        self.l2_reg = l2_reg
-        self.time_series = time_series
-        self.verbose = verbose
-        self.precisions_ = {}
-        if alphas is None:
-            self.alphas_ = np.logspace(-3, 2)
-        else:
-            self.alphas_ = alphas
-
-    def _run(self, X, l1_reg, l2_reg=0):
-        s = SPACE(l1_reg, l2_reg)
-        s.fit(X)
-        return s.precision_, s.sig
-
-    def likelihood_function(self, prec, cov):
-        sgn, logdet = np.linalg.slogdet(prec)
-        logdet = sgn * logdet
-        return -logdet * np.trace(prec @ cov)
-
-    def fit(self,X):
-        """
-        Runs with some cross validation
-        """
-        if not self.time_series:
-            kf = KFold(n_splits = self.n_folds)
-        else:
-            kf = TimeSeriesSplit(n_splits = self.n_folds)
-        l_likelihood = []
-        n, p = X.shape
-        # Calculate the lambdas to check
-        i = 0
-        for train, test in kf.split(X):
-            test_errors = []
-
-            X_train = X[train, :]
-            X_test = X[test, :]
-            S_test = np.cov(X_test, rowvar=False)
-            outputs = Parallel(n_jobs=4)(delayed(self._run)(X_train, l, self.l2_reg) for l in self.alphas_)
-            #self.precisions_[i] = precs
-            self.alphas = np.logspace(-3, 2)
-            for prec, sig in outputs:
-                error = self.rss_function(X_test, prec, sig)
-                test_errors.append(error)
-
-            if self.verbose:
-                print("Kfold %s done" % (i))
-
-            i += 1
-
-        min_err_i = np.argmin(test_errors)
-        best_l = self.alphas_[min_err_i]
-
-        if self.verbose:
-            print("Best lambda is at %s" % best_l)
-
-        prec = self._run(X, best_l, self.l2_reg)
-
-        self.precision_ = prec
-        self.alpha_ = best_l
-
-    def rss_function(self, X_test, prec, sig):
-        """
-        An alternative approach based on how well each column predicts the others
-        """
-        n, p = X.shape
-        rss = 0
-        for i in range(p):
-            rss_i = 0
-            predict = 0
-            vec_rss_i = 0
-            for j in range(p):
-                if i == j:
-                    continue
-                predict += prec[i, j] * np.sqrt(sig[j] / sig[i]) * X[:, j]     
-            residual = np.power(X[:, i] - predict, 2).sum()
-            rss += residual
-
-        return rss
-
+   
 class SPACE_BIC():
     """
     Fits SPACE using BIC instead
@@ -208,14 +117,16 @@ class SPACE_BIC():
         self.alpha_ = None
         
         if alphas is None:
-            self.alphas_ = np.logspace(1.8, 2.5)
+            self.alphas_ = np.logspace(-3, 2)
         else:
             self.alphas_ = alphas
 
     def _run(self, X, l1_reg, l2_reg=0):
         s = SPACE(l1_reg, l2_reg)
         s.fit(X)
-        return s.precision_, s.sig
+        #import space_r
+        #prec, sig = space_r.run(X, l1_reg, l2_reg)
+        return s.precision_, s.sig_
 
     def fit(self, X):
         n, p = X.shape
@@ -313,5 +224,5 @@ if __name__=="__main__":
     #print(space_bic.precision_)
     #print(space_bic.alpha_)
 
-    #prec = space_r.run(X, space_cv.alpha_)
-    #print(prec)
+    prec = space_r.run(X, max_l)
+    print(prec[0])
