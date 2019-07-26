@@ -12,10 +12,9 @@ import seaborn as sns
 from pathlib import Path
 import operator
 import matplotlib
+import statsmodels.tsa.stattools
 
 def get_centrality(M, company_names, company_sectors):
-    #centrality = nx.eigenvector_centrality(G, max_iter=1000)
-    #centrality = dict(G.degree(weight='weight'))
     centrality = np.sum(np.abs(M), axis=0)
     total_centrality = np.sum(np.abs(M))
     centrality_dict = {}
@@ -119,6 +118,49 @@ def threshold_matrix(M, threshold):
     high_value_indices = np.abs(A) > threshold
     A[high_value_indices] = 1
     return A
+
+def get_sector_full_nice_name(sector):
+    """
+    Returns a short version of the sector name
+    """       
+    if sector == "information_technology":
+        return "Information Technology"
+    elif sector == "real_estate":
+        return "Real Estate"
+    elif sector == "materials":
+        return "Materials"
+    elif sector == "telecommunication_services":
+        return "Telecommunication Services"
+    elif sector == "energy":
+        return "Energy"
+    elif sector == "financials":
+        return "Financials"
+    elif sector == "utilities":
+        return "Utilities"
+    elif sector == "industrials":
+        return "Industrials"
+    elif sector == "consumer_discretionary":
+        return "Consumer Discretionary"
+    elif sector == "health_care":
+        return "Healthcare"
+    elif sector == "consumer_staples":
+        return "Consumer Staples"
+    else:
+        raise Exception("%s is not a valid sector" % sector)
+
+def plot_bar_chart(vals, label=None, title=None, xlabel=None, ylabel=None):
+    fig = plt.figure()
+    n = vals.shape[0]
+    index = np.arange(n)
+    bar_width = 0.1
+    rects1 = plt.bar(index, vals, bar_width, label=label)
+    #axes = fig.axes
+    #print(axes)
+    #axes[0].set_xticklabels(label)
+    plt.xticks(index, label)
+    plt.title(title)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
 
 #df = pd.DataFrame.from_csv("s_and_p_500_sector_tagged.csv")
 df = pd.read_csv("s_and_p_500_daily_close_filtered.csv", index_col=0)
@@ -299,33 +341,28 @@ plt.title("Sector Centrality")
 sector_centrality = pd.DataFrame()
 for sector in sector_centrality_over_time:
     ts = pd.Series(sector_centrality_over_time[sector], index=dt)
-    sector_centrality[sector] = ts
+    sector_nice_name = get_sector_full_nice_name(sector)
+    sector_centrality[sector_nice_name] = ts
 
-#sns.lmplot('x', 'y', data=df, fit_reg=False)
 sector_centrality.plot(color = ['#1f77b4', '#aec7e8', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf', '#ff9896'])
 
 fig, ax1 = plt.subplots()
 
 ax2 = ax1.twinx()
 df_2 = pd.read_csv("WTI.csv")
-df_2.plot(ax=ax1, legend=False, color='#1f77b4')
-sector_centrality['energy'].plot(ax=ax2, color='#ff7f0e')
+df_2 = df_2.set_index("Date")
+aligned_df = df_2.align(sector_centrality['Energy'], join='inner', axis=0)
+df_2 = aligned_df[0]
+df_3 = aligned_df[1]
+df_2['Price'].plot(ax=ax1, legend=False, color='#1f77b4')
+sector_centrality['Energy'].plot(ax=ax2, color='#ff7f0e')
 ax1.set_ylabel('WTI Price')
 ax2.set_ylabel('Energy Sector Centrality')
 
-# Extract the volume out
-vol = df_2['Vol.']
-volume = []
-for x in vol:
-    if x =='-':
-        volume.append(tmp)
-        continue
-    tmp = float(x[:-1])*1000
-    volume.append(tmp)
-
-volume = pd.Series(volume, index=df_2.index)
 plt.figure()
-volume.plot()
+cross_corr = statsmodels.tsa.stattools.ccf(df_2['Price'], df_3)
+plot_bar_chart(cross_corr)
+plt.title("Cross Correlation of oil price and energy sector centrality")
 
 # Next we look at the individual nodes to see what's going only
 company_centrality = collections.defaultdict(list)
@@ -366,4 +403,4 @@ company_centrality_df[ind].plot()
 plt.title("10 Companies with largest stdev centrality")
 
 save_open_figures("financial_networks_graphml_")
-plt.show()
+#plt.show()

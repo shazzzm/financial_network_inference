@@ -117,7 +117,7 @@ class SPACE_BIC():
         self.alpha_ = None
         
         if alphas is None:
-            self.alphas_ = np.logspace(-3, 2)
+            self.alphas_ = np.logspace(-3, 2.5)
         else:
             self.alphas_ = alphas
 
