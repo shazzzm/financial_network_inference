@@ -1,13 +1,14 @@
 import ctypes
 import numpy as np
 from numpy.ctypeslib import ndpointer
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, normalize
 from joblib import Parallel, delayed
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import KFold, TimeSeriesSplit
 from scipy.stats import norm
 import sklearn.datasets
 import space_r
+import sklearn.linear_model as lm
 
 class SPACE():
     """
@@ -38,7 +39,7 @@ class SPACE():
         p_in = ctypes.c_int(p)
         #self.sig = np.array(self.sig)
         sigma_sr = np.sqrt(self.sig_).astype(np.float32)
-        n_iter = ctypes.c_int(100)
+        n_iter = ctypes.c_int(500)
         iter_count = ctypes.c_int(0)
         beta = np.zeros(p**2, dtype=np.float32)
         n_iter_out = ctypes.c_int(0)
@@ -104,7 +105,59 @@ class SPACE():
         result = reciprocal_diag_sig_sqrt @ result @ diag_sig_sqrt
         result = result.T 
         return result.astype(np.float32)
-   
+
+    def build_input(self, X):
+        """
+        Builds the inputs into the lasso regression problem
+        """
+        n, p = X.shape
+        new_n = n * p
+        new_p = int(p * (p - 1)/2)
+        new_X = np.zeros((new_n, new_p))
+        #new_X = sp.sparse.lil_matrix((new_n, new_p))
+        indices = np.arange(p)
+
+        x = 0
+        for i in range(p):
+            for j in range(i+1, p):
+                #if i == j:
+                #    continue
+                new_col = np.zeros(n*p)
+                new_col[i*n:(i+1)*n] = np.sqrt(self.sig_[j]/self.sig_[i]) * X[:, j]
+                new_col[j*n:(j+1)*n] = np.sqrt(self.sig_[i]/self.sig_[j]) * X[:, i]
+
+                new_X[:, x] = new_col
+                x += 1
+        new_y = X.flatten(order='F')
+
+        return new_X, new_y
+
+    def python_solve(self, X, iter=1):
+        """
+        Builds and solves the model in pure python
+        """
+        n, p = X.shape
+        space_prec = np.zeros((p, p))
+        self.sig_ = np.ones(p, dtype=np.float32)
+        ind = np.triu_indices(p, k=1)
+        ind_2 = np.triu_indices(p)
+        #X = normalize(X, axis=1)
+
+        for i in range(iter):
+            X_inp, y_inp = self.build_input(X)
+            lasso = lm.Lasso(self.l1_reg/(X_inp.shape[0]))
+            lasso.fit(X_inp, y_inp)
+            coef = lasso.coef_
+            space_prec[ind] = coef
+            space_prec += space_prec.T
+            np.fill_diagonal(space_prec, 1)
+
+            coef = space_prec[ind_2]
+            beta = self.Beta_coef(coef, self.sig_)
+            self.sig_ = self.InvSig(X, beta)   
+        return space_prec
+
+
 class SPACE_BIC():
     """
     Fits SPACE using BIC instead
@@ -117,7 +170,7 @@ class SPACE_BIC():
         self.alpha_ = None
         
         if alphas is None:
-            self.alphas_ = np.logspace(-3, 2.5)
+            self.alphas_ = np.logspace(-3, 3, 100)
         else:
             self.alphas_ = alphas
 
@@ -170,13 +223,8 @@ class SPACE_BIC():
             for j in range(p):
                 if i == j:
                     continue
-                #vec_rss_i += np.power(X[:, i] - prec[i, j] * np.sqrt(sig[j] / sig[i]) * X[:, j], 2).sum()
                 predict += prec[i, j] * np.sqrt(sig[j] / sig[i]) * X[:, j]     
-            #vec_rss_i = n*sklearn.metrics.mean_squared_error(X[:, i], predict)
-            #print(rss_i)
-            #print(vec_rss_i)
             residual = np.power(X[:, i] - predict, 2).sum()
-            #print(vec_rss_i)
 
             k = np.count_nonzero(prec[indices!=i, i])
             total_bic += n * np.log(residual) + np.log(n) * k
@@ -203,7 +251,7 @@ if __name__=="__main__":
     #print(space_bic.precision_)
     #print(space_bic.alpha_)
 
-    P = sklearn.datasets.make_sparse_spd_matrix(dim=p, alpha=0.5, smallest_coef=.4, largest_coef=.7, norm_diag=True)
+    P = sklearn.datasets.make_sparse_spd_matrix(dim=p, alpha=0.7, smallest_coef=.4, largest_coef=.7, norm_diag=True)
     C = np.linalg.inv(P)
     X = np.random.multivariate_normal(np.zeros(p), C, n)
     ss = StandardScaler()
@@ -214,6 +262,7 @@ if __name__=="__main__":
     space = SPACE(max_l)
     space.fit(X)
     print(space.precision_)
+    print(space.python_solve(X))
     #space_cv = SPACECV()
     #space_cv.fit(X)
     #print(space_cv.precision_)
