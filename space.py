@@ -7,7 +7,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.model_selection import KFold, TimeSeriesSplit
 from scipy.stats import norm
 import sklearn.datasets
-import space_r
 import sklearn.linear_model as lm
 import scipy
 
@@ -32,7 +31,6 @@ class SPACE():
             ctypes.POINTER(ctypes.c_int), ndpointer(ctypes.c_float)]
         self.precision_ = None
         self.verbose = verbose
-
 
     def run_jsrm(self, X):
         X = X.copy()
@@ -110,7 +108,7 @@ class SPACE():
 
     def build_input(self, X):
         """
-        Builds the inputs into the lasso regression problem
+        Builds the inputs into the lasso regression problem. This is slow for anything non trivial!
         """
         n, p = X.shape
         new_n = n * p
@@ -140,7 +138,7 @@ class SPACE():
 
     def python_solve(self, X, iter=2):
         """
-        Builds and solves the model in pure python
+        Builds and solves the model in pure python. Slow for anything non-trivial!
         """
         n, p = X.shape
         space_prec = np.zeros((p, p))
@@ -253,7 +251,8 @@ class SPACE_BIC():
 
 class SPACE_BIC_Python(SPACE_BIC):
     """
-    BIC version that fits using Python implementation
+    BIC version that fits using Python implementation. This is slow, use the SPACE_BIC method for anything other than
+    trivial problems.
     """
     def __init__(self, verbose=False, l2_reg=0, alphas=None):
         self.verbose = verbose
@@ -316,25 +315,9 @@ class SPACE_BIC_Python(SPACE_BIC):
         self.outputs_ = outputs       
 
 if __name__=="__main__":
+    # A trivial example to show the methods
     n = 10 
     p = 5
-    """
-    X = np.random.rand(n, p)
-    ss = StandardScaler()
-    X = ss.fit_transform(X)
-    #space = SPACE(0.1)
-    #space.fit(X)
-    #print(space.precision_)
-    space_cv = SPACECV()
-    space_cv.fit(X)
-    print(space_cv.precision_)
-    print(space_cv.alpha_)
-    """
-    #space_bic = SPACE_BIC(verbose=True)
-    #space_bic.fit(X)
-    #print(space_bic.precision_)
-    #print(space_bic.alpha_)
-
     P = sklearn.datasets.make_sparse_spd_matrix(dim=p, alpha=0.7, smallest_coef=.4, largest_coef=.7, norm_diag=True)
     C = np.linalg.inv(P)
     X = np.random.multivariate_normal(np.zeros(p), C, n)
@@ -352,15 +335,10 @@ if __name__=="__main__":
     space_bic.fit(X)
     print(space_bic.precision_)
 
-    #space_cv = SPACECV()
-    #space_cv.fit(X)
-    #print(space_cv.precision_)
-    #print(space_cv.alpha_)
-
-    #space_bic = SPACE_BIC(verbose=True)
-    #space_bic.fit(X)
-    #print(space_bic.precision_)
-    #print(space_bic.alpha_)
+    space_bic = SPACE_BIC(verbose=True)
+    space_bic.fit(X)
+    print(space_bic.precision_)
+    print(space_bic.alpha_)
 
     prec = space_r.run(X, max_l)
     print(prec[0])
