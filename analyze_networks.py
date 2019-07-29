@@ -14,36 +14,36 @@ import operator
 import matplotlib
 import statsmodels.tsa.stattools
 
-def get_centrality(M, company_names, company_sectors):
-    centrality = np.sum(np.abs(M), axis=0)
-    total_centrality = np.sum(np.abs(M))
-    centrality_dict = {}
+def get_centrality(G):
+    node_centrality = collections.defaultdict(int)
+    total = 0
+    # Calculate the weighted edge centrality
+    for node in G.nodes:
+        for edge in G[node]:
+            node_centrality[node] += abs(G[node][edge]['weight'])
+            total += abs(G[node][edge]['weight'])
 
-    for i,comp in enumerate(company_names):
-        centrality_dict[comp] = centrality[i]/total_centrality
+    # Normalise so the total is 1
+    for comp in node_centrality:
+        node_centrality[comp] = node_centrality[comp]/total
 
-    centrality = centrality_dict
-
-    sorted_centrality = sort_dict(centrality)
+    sorted_centrality = sort_dict(node_centrality)
     centrality_names = [x[0] for x in sorted_centrality]
     centrality_sectors = []
 
     for name in centrality_names:
-        ind = np.where(company_names == name)[0]
-        centrality_sectors.append(company_sectors[ind])
+        centrality_sectors.append(G.nodes[name]['sector'])
 
-    # Figure out the mean eigenvector centrality of a sector
+    # Figure out the mean centrality of a sector
     sector_centrality = collections.defaultdict(float)
     no_companies_in_sector = collections.defaultdict(int)
 
-    for i,comp in enumerate(company_names):
-        sector_centrality[company_sectors[i]] += abs(centrality[comp])
-        no_companies_in_sector[company_sectors[i]] += 1
+    for comp in G:
+        sector = G.nodes[comp]['sector']
+        sector_centrality[sector] += node_centrality[comp]
+        no_companies_in_sector[sector] += 1
 
-    #for sec in sector_centrality:
-    #    sector_centrality[sec] /= no_companies_in_sector[sec]
-
-    return centrality, sector_centrality
+    return node_centrality, sector_centrality
 
 def turn_dict_into_np_array(dct, company_names):
     """
@@ -66,27 +66,19 @@ def sort_out_date_axis():
     plt.xlabel("Dates")
     plt.tight_layout()
 
-def count_sector_connections(M, company_names, company_sectors):
+def count_sector_connections(G):
     """
     Counts the number of connections from one sector to the next
     """
-    no_sectors = len(set(company_sectors))
-    sector_lst = sorted(list(set(company_sectors)))
-    sector_connections = np.zeros((no_sectors, no_sectors))
+    sector_connections = collections.defaultdict(lambda: collections.defaultdict(int))
+    for node in G:
+        edges = G[node]
+        sec1 = G.nodes[node]['sector']
+        for edge in edges:
+            sec2 = G.nodes[edge]['sector']
+            sector_connections[sec1][sec2] += 1
 
-    for i,row in enumerate(M):
-        for j, x in enumerate(row):
-            # Find which sector the companies are in
-            sec1 = company_sectors[i]
-            sec2 = company_sectors[j]
-
-            # Figure out which entry of the matrix to add to
-            idx = sector_lst.index(sec1)
-            idy = sector_lst.index(sec2)
-
-            sector_connections[idx, idy] += x
-
-    return sector_connections, sector_lst
+    return sector_connections
 
 def sort_dict(dct):
     """
@@ -167,7 +159,7 @@ df = pd.read_csv("s_and_p_500_daily_close_filtered.csv", index_col=0)
 company_sectors = df.iloc[0, :].values
 company_names = df.T.index.values
 sectors = list(sorted(set(company_sectors)))
-
+num_sectors = len(sectors)
 company_sector_lookup = {}
 
 for i,comp in enumerate(company_names):
@@ -193,7 +185,7 @@ dates_2 = []
 for x in range(no_runs):
     dates_2.append(df.index[(x+1)*slide_size+window_size][0:10])
 
-networks_folder = "networks/"
+networks_folder = "networks_bic/"
 onlyfiles = [os.path.abspath(os.path.join(networks_folder, f)) for f in os.listdir(networks_folder) if os.path.isfile(os.path.join(networks_folder, f))]
 #onlyfiles = list(map(lambda x: os.path.splitext(x)[0], onlyfiles))
 Graphs = []
@@ -231,12 +223,19 @@ centralities = np.zeros(number_companies*number_graphs)
 risks = np.zeros(number_companies*number_graphs)
 ls = []
 
+sharpe_correlations = []
+sharpe_correlations_pvalues = []
+risk_correlations = []
+risk_correlations_pvalues = []
+ret_correlations = []
+ret_correlations_pvalues = []
+
 for i,G in enumerate(Graphs):
     ls.append(G.graph['l'])
     prec = np.array(nx.to_numpy_matrix(G))
     number_edges.append(len(G.edges()))
-    node_centrality, sector_centrality = get_centrality(prec, company_names, company_sectors)
-    sector_connections, sector_list = count_sector_connections(np.abs(prec), company_names, company_sectors)
+    node_centrality, sector_centrality = get_centrality(G)
+    sector_connections = count_sector_connections(G)
     sector_centrality_lst.append(sector_centrality)
     node_centrality_lst.append(node_centrality)
     no_isolates.append(len(list(nx.isolates(G))))
@@ -251,14 +250,24 @@ for i,G in enumerate(Graphs):
     # Look at the returns
     if i + 1 < number_graphs:
         X_new = X[(i+1)*slide_size:(i+2)*slide_size+window_size, :]
-        ret = np.mean(X_new, axis=0)
+        ret = np.sum(X_new, axis=0)
         risk = np.std(X_new, axis=0)
 
         sharpe = np.divide(ret, risk)
+        centrality = turn_dict_into_np_array(node_centrality, company_names)
         sharpe_ratios[i*number_companies:(i+1)*number_companies] = sharpe.flatten()
-        centralities[i*number_companies:(i+1)*number_companies] = turn_dict_into_np_array(node_centrality, company_names)
+        centralities[i*number_companies:(i+1)*number_companies] = centrality
         risks[i*number_companies:(i+1)*number_companies] = risk.flatten()
 
+        corr, pvalue = spearmanr(centrality, sharpe)
+        sharpe_correlations_pvalues.append(pvalue)
+        sharpe_correlations.append(corr)
+        corr, pvalue = spearmanr(centrality, risk)
+        risk_correlations.append(corr)
+        risk_correlations_pvalues.append(pvalue)
+        corr, pvalue = spearmanr(centrality, ret)
+        ret_correlations.append(corr)
+        ret_correlations_pvalues.append(pvalue)
 plt.figure()
 plt.scatter(centralities, sharpe_ratios)
 plt.title("Centrality Against Sharpe Ratio")
@@ -275,19 +284,26 @@ plt.ylabel("Risk")
 print("Correlation between centrality and risks")
 print(spearmanr(centralities, risks))
 
-# See how individual companies change their links
-prec_sum = sum(prec_lst)
-sector_connections_sum = sum(sector_connections_lst)
-#prec_sum[prec_sum!=number_graphs] = 0
-#prec_sum[prec_sum==number_graphs] = 1
+sector_connections_matrix = np.zeros((num_sectors, num_sectors))
+
+number_of_sector_connections = np.zeros(num_sectors)
+
+#total_sector_connections = collections.defaultdict(lambda: collections.defaultdict(int))
+for sec_dict in sector_connections_lst:
+    for sec1 in sec_dict:
+        for sec2 in sec_dict[sec1]:
+            i = sectors.index(sec1)
+            j = sectors.index(sec2)
+            sector_connections_matrix[i, j] += sec_dict[sec1][sec2]
+            number_of_sector_connections[i] += 1
+
+sector_nice_names = [get_sector_full_nice_name(x) for x in sectors]
 
 plt.figure()
-sns.heatmap(prec_sum)
-plt.title("Sum of edge strengths")
-
-plt.figure()
-ax = sns.heatmap(sector_connections_sum, yticklabels=sector_list)
-plt.title("Sum of sector edge strengths")
+matplotlib.rc('xtick', labelsize=16) 
+matplotlib.rc('ytick', labelsize=16) 
+ax = sns.heatmap(sector_connections_matrix, cmap='Greys_r', xticklabels=sector_nice_names, yticklabels=sector_nice_names)
+plt.title("Sum of sector connections")
 plt.xticks(rotation=90)
 
 number_edges = np.array(number_edges)
@@ -300,11 +316,12 @@ fig = plt.figure()
 ts.plot()
 plt.title("Number of edges")
 
+#What is the difference between these?
 dt_2 = pd.to_datetime(dates)
 ts = pd.Series(edges_changes, index=dt_2)
 fig = plt.figure()
 ts.plot()
-plt.title("Changes in edges")
+plt.title("Changes in number of edges")
 
 ts = pd.Series(prec_edge_diff, index=dt_2)
 plt.figure()
@@ -327,6 +344,27 @@ ts.plot()
 plt.title("Regularization Parameter")
 sector_centrality_over_time = collections.defaultdict(list)
 
+ts = pd.Series(sharpe_correlations, index=dt_2)
+plt.figure()
+ts.plot()
+plt.title("Correlation between centrality and out of sample Sharpe ratio")
+
+ts = pd.Series(sharpe_correlations_pvalues, index=dt_2)
+plt.figure()
+ts.plot()
+plt.title("Correlation between centrality and out of sample Sharpe ratio pvalues")
+
+ts = pd.Series(risk_correlations, index=dt_2)
+ts.plot()
+plt.title("Correlation between centrality and out of sample risk")
+
+ts = pd.Series(ret_correlations, index=dt_2)
+ts.plot()
+plt.title("Correlation between centrality and out of sample return")
+#ts = pd.Series(risk_correlations_pvalues, index=dt_2)
+#ts.plot(ax=ax2)
+#plt.title("Correlation between centrality and out of sample risk pvalues")
+
 for centrality in sector_centrality_lst: 
     s = sum(centrality.values())
     #s = 1
@@ -336,8 +374,6 @@ for centrality in sector_centrality_lst:
         else:
             sector_centrality_over_time[sector].append(centrality[sector]/s)
 
-plt.figure()
-plt.title("Sector Centrality")
 sector_centrality = pd.DataFrame()
 for sector in sector_centrality_over_time:
     ts = pd.Series(sector_centrality_over_time[sector], index=dt)
@@ -349,20 +385,37 @@ sector_centrality.plot(color = ['#1f77b4', '#aec7e8', '#ff7f0e', '#2ca02c', '#d6
 fig, ax1 = plt.subplots()
 
 ax2 = ax1.twinx()
-df_2 = pd.read_csv("WTI.csv")
-df_2 = df_2.set_index("Date")
-aligned_df = df_2.align(sector_centrality['Energy'], join='inner', axis=0)
-df_2 = aligned_df[0]
-df_3 = aligned_df[1]
-df_2['Price'].plot(ax=ax1, legend=False, color='#1f77b4')
+wti_df = pd.read_csv("WTI.csv")
+wti_df = wti_df.set_index("Date")
+aligned_df = wti_df.align(sector_centrality['Energy'], join='inner', axis=0)
+wti_df = aligned_df[0]
+centrality_df = aligned_df[1]
+wti_df['Price'].plot(ax=ax1, legend=False, color='#1f77b4')
 sector_centrality['Energy'].plot(ax=ax2, color='#ff7f0e')
 ax1.set_ylabel('WTI Price')
 ax2.set_ylabel('Energy Sector Centrality')
 
-plt.figure()
-cross_corr = statsmodels.tsa.stattools.ccf(df_2['Price'], df_3)
+cross_corr = statsmodels.tsa.stattools.ccf(wti_df['Price'], centrality_df)
 plot_bar_chart(cross_corr)
 plt.title("Cross Correlation of oil price and energy sector centrality")
+
+usd_to_eur_df = pd.read_csv("USD_EUR.csv")
+usd_to_eur_df = usd_to_eur_df.set_index("Date")
+aligned_df = usd_to_eur_df.align(sector_centrality['Energy'], join='inner', axis=0)
+usd_to_eur_df = aligned_df[0]
+centrality_df = aligned_df[1]
+
+fig, ax1 = plt.subplots()
+
+ax2 = ax1.twinx()
+usd_to_eur_df['Price'].plot(ax=ax1, legend=False, color='#1f77b4')
+sector_centrality['Energy'].plot(ax=ax2, color='#ff7f0e')
+ax1.set_ylabel('USD to EUR')
+ax2.set_ylabel('Energy Sector Centrality')
+
+cross_corr = statsmodels.tsa.stattools.ccf(usd_to_eur_df['Price'], centrality_df)
+plot_bar_chart(cross_corr)
+plt.title("Cross Correlation of USD to EUR and energy sector centrality")
 
 # Next we look at the individual nodes to see what's going only
 company_centrality = collections.defaultdict(list)

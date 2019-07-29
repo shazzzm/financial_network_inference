@@ -10,7 +10,7 @@ import networkx as nx
 from scipy.stats import norm
 from sklearn.preprocessing import StandardScaler
 import space
-import space_r
+import os
 
 df = pd.read_csv("s_and_p_500_daily_close_filtered.csv", index_col=0)
 
@@ -30,11 +30,9 @@ p = X.shape[1]
 no_runs = math.floor((no_samples - window_size)/ (slide_size))
 print("We're running %s times" % no_runs)
 
-
-
 X_new = X[0:window_size, :]
 ss = StandardScaler()
-#X_new = ss.fit_transform(X_new)
+X_new = ss.fit_transform(X_new)
 s = space.SPACE_BIC(verbose=True)
 s.fit(X_new)
 prec = s.precision_
@@ -48,14 +46,11 @@ G=nx.from_numpy_matrix(prec)
 G=nx.relabel_nodes(G, dict(zip(G.nodes(), company_names)))
 node_attributes = dict(zip(company_names[list(range(len(company_sectors)))], company_sectors))
 nx.set_node_attributes(G, node_attributes, 'sector')
-G = nx.from_numpy_matrix(prec)
 G.graph['l'] = l
 nx.write_graphml(G, "network_over_time_%s.graphml" % 0)
 print("%s non-zero values" % np.count_nonzero(prec))
 
 prev_prec = prec.copy()
-
-no_runs = 10
 
 # If we hit the maximum of minimum lambda it might be worth rerunning with a different range
 possible_reruns = []
@@ -65,13 +60,13 @@ for x in range(1, no_runs):
     X_new = X[x*slide_size:(x+1)*slide_size+window_size, :]
     ss = StandardScaler()
     X_new = ss.fit_transform(X_new)
-    s = space.SPACE_BIC(l2_reg=5, verbose=True)
+    s = space.SPACE_BIC(verbose=True)
     s.fit(X_new)
     prec = s.precision_
     l = s.alpha_
 
     if l == s.alphas_.min() or l == s.alphas_.max():
-        possible_reruns.append(l)
+        possible_reruns.append(x)
 
     #prec = space_r.run(X, ls[x])
     #l = ls[x]
@@ -81,8 +76,7 @@ for x in range(1, no_runs):
     G=nx.relabel_nodes(G, dict(zip(G.nodes(), company_names)))
     node_attributes = dict(zip(company_names[list(range(len(company_sectors)))], company_sectors))
     nx.set_node_attributes(G, node_attributes, 'sector')
-    G = nx.from_numpy_matrix(prec)
     G.graph['l'] = l
     nx.write_graphml(G, "network_over_time_%s.graphml" % x)
 
-nx.save("reruns.npy", possible_reruns)
+np.save("reruns.npy", possible_reruns)

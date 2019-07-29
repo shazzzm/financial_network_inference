@@ -9,12 +9,13 @@ from scipy.stats import norm
 import sklearn.datasets
 import space_r
 import sklearn.linear_model as lm
+import scipy
 
 class SPACE():
     """
     Python implementation of SPACE. We use the C version of the Joint Sparse Regression model 
     """
-    def __init__(self, l1_reg, l2_reg=0, sig=None, weight=None):
+    def __init__(self, l1_reg, l2_reg=0, sig=None, weight=None, verbose=False):
         self.l1_reg = l1_reg
         self.l2_reg = l2_reg
         self.l1_reg_ctype = ctypes.c_float(self.l1_reg)
@@ -30,6 +31,7 @@ class SPACE():
             ctypes.POINTER(ctypes.c_float), ndpointer(ctypes.c_float),ndpointer(ctypes.c_float), ctypes.POINTER(ctypes.c_int), 
             ctypes.POINTER(ctypes.c_int), ndpointer(ctypes.c_float)]
         self.precision_ = None
+        self.verbose = verbose
 
 
     def run_jsrm(self, X):
@@ -113,26 +115,30 @@ class SPACE():
         n, p = X.shape
         new_n = n * p
         new_p = int(p * (p - 1)/2)
-        new_X = np.zeros((new_n, new_p))
+        #new_X = np.zeros((new_n, new_p))
+        new_X = scipy.sparse.dok_matrix((new_n, new_p))
         #new_X = sp.sparse.lil_matrix((new_n, new_p))
         indices = np.arange(p)
+
+        if self.sig_ is None:
+            self.sig_ = np.ones(p)
 
         x = 0
         for i in range(p):
             for j in range(i+1, p):
                 #if i == j:
                 #    continue
-                new_col = np.zeros(n*p)
-                new_col[i*n:(i+1)*n] = np.sqrt(self.sig_[j]/self.sig_[i]) * X[:, j]
-                new_col[j*n:(j+1)*n] = np.sqrt(self.sig_[i]/self.sig_[j]) * X[:, i]
+                new_col = np.zeros((n*p, 1))
+                new_col[i*n:(i+1)*n] = np.sqrt(self.sig_[j]/self.sig_[i]) * X[:, j].reshape((n, 1))
+                new_col[j*n:(j+1)*n] = np.sqrt(self.sig_[i]/self.sig_[j]) * X[:, i].reshape((n, 1))
 
                 new_X[:, x] = new_col
                 x += 1
         new_y = X.flatten(order='F')
 
-        return new_X, new_y
+        return new_X.tocoo(), new_y
 
-    def python_solve(self, X, iter=1):
+    def python_solve(self, X, iter=2):
         """
         Builds and solves the model in pure python
         """
@@ -155,6 +161,7 @@ class SPACE():
             coef = space_prec[ind_2]
             beta = self.Beta_coef(coef, self.sig_)
             self.sig_ = self.InvSig(X, beta)   
+            print(self.sig_)
         return space_prec
 
 
@@ -170,15 +177,15 @@ class SPACE_BIC():
         self.alpha_ = None
         
         if alphas is None:
-            self.alphas_ = np.logspace(-3, 3, 100)
+            self.alphas_ = np.logspace(-3, 3, 50)
         else:
             self.alphas_ = alphas
 
     def _run(self, X, l1_reg, l2_reg=0):
+        if self.verbose:
+            print("Running %s" % l1_reg)
         s = SPACE(l1_reg, l2_reg)
         s.fit(X)
-        #import space_r
-        #prec, sig = space_r.run(X, l1_reg, l2_reg)
         return s.precision_, s.sig_
 
     def fit(self, X):
@@ -187,23 +194,36 @@ class SPACE_BIC():
         #max_l = n**(3/2) * rv.cdf(1 - (0.1/(2*p**2)))  
         #min_l = 0.01 * max_l
 
-        if self.verbose:
-            print("Lambda limits are from %s to %s" % (self.alphas_[0], self.alphas_[-1]))
+        rerun = True
 
-        outputs = Parallel(n_jobs=4)(delayed(self._run)(X, l, self.l2_reg) for l in self.alphas_)
-        bics = []
-        for prec, sig in outputs:
-            error = self.bic(X, prec, sig)
-            bics.append(error)
-        bics = np.array(bics)
-        min_err_i = np.argmin(bics)
-        best_l = self.alphas_[min_err_i]
+        min_l = 1
+        max_l = 200
 
-        if best_l == self.alphas_[0]:
-            print("WARNING: lambda is at the minimum value. It might be worth rerunning with a different set of alphas")
-        
-        if best_l == self.alphas_[-1]:
-            print("WARNING: lambda is at the maximum value. It might be worth rerunning with a different set of alphas")
+        while rerun:
+            self.alphas_ = np.linspace(min_l, max_l)
+            if self.verbose:
+                print("Lambda limits are from %s to %s" % (self.alphas_[0], self.alphas_[-1]))
+
+            outputs = Parallel(n_jobs=4)(delayed(self._run)(X, l, self.l2_reg) for l in self.alphas_)
+            bics = []
+            for prec, sig in outputs:
+                error = self.bic(X, prec, sig)
+                bics.append(error)
+            bics = np.array(bics)
+            min_err_i = np.argmin(bics)
+            best_l = self.alphas_[min_err_i]
+            rerun = False
+            if best_l == self.alphas_[0]:
+                rerun = True
+                print("WARNING: lambda is at the minimum value. It might be worth rerunning with a different set of alphas")
+                min_l = min_l*0.1
+                max_l = max_l*0.1
+            
+            if best_l == self.alphas_[-1]:
+                rerun = True
+                print("WARNING: lambda is at the maximum value. It might be worth rerunning with a different set of alphas")
+                min_l = min_l*10
+                max_l = max_l*10
 
         if self.verbose:
             print("Best lambda is at %s" % best_l)
@@ -230,6 +250,70 @@ class SPACE_BIC():
             total_bic += n * np.log(residual) + np.log(n) * k
 
         return total_bic
+
+class SPACE_BIC_Python(SPACE_BIC):
+    """
+    BIC version that fits using Python implementation
+    """
+    def __init__(self, verbose=False, l2_reg=0, alphas=None):
+        self.verbose = verbose
+        self.outputs_ = None
+        self.precision_ = None
+        self.l2_reg = l2_reg
+        self.alpha_ = None
+        self.alphas_ = None
+
+    def _run(self, X, l1_reg, l2_reg=0):
+        s = SPACE(l1_reg)
+        prec = s.python_solve(X, l1_reg)
+
+        return prec, s.sig_
+
+    def fit(self, X):
+        n, p = X.shape
+        #max_l = n**(3/2) * rv.cdf(1 - (0.1/(2*p**2)))  
+        #min_l = 0.01 * max_l
+        s = SPACE(1)
+        new_X, new_y = s.build_input(X)
+
+        if self.alphas_ is None:
+            max_l = np.abs(new_X.T @ new_y).max()
+            min_l = 0.0001 * max_l
+
+        rerun = True
+
+        while rerun:
+            self.alphas_ = np.logspace(np.log10(min_l), np.log10(max_l))
+            if self.verbose:
+                print("Lambda limits are from %s to %s" % (self.alphas_[0], self.alphas_[-1]))
+
+            outputs = Parallel(n_jobs=4)(delayed(self._run)(X, l, self.l2_reg) for l in self.alphas_)
+            bics = []
+            for prec, sig in outputs:
+                error = self.bic(X, prec, sig)
+                bics.append(error)
+            bics = np.array(bics)
+            min_err_i = np.argmin(bics)
+            best_l = self.alphas_[min_err_i]
+            rerun = False
+            if best_l == self.alphas_[0]:
+                rerun = True
+                print("WARNING: lambda is at the minimum value. It might be worth rerunning with a different set of alphas")
+                min_l = min_l*0.1
+                max_l = max_l*0.1
+            
+            if best_l == self.alphas_[-1]:
+                rerun = True
+                print("WARNING: lambda is at the maximum value. It might be worth rerunning with a different set of alphas")
+                min_l = min_l*10
+                max_l = max_l*10
+
+        if self.verbose:
+            print("Best lambda is at %s" % best_l)
+            #print(bics)
+        self.alpha_ = best_l
+        self.precision_ = outputs[min_err_i][0] 
+        self.outputs_ = outputs       
 
 if __name__=="__main__":
     n = 10 
@@ -263,6 +347,11 @@ if __name__=="__main__":
     space.fit(X)
     print(space.precision_)
     print(space.python_solve(X))
+
+    space_bic = SPACE_BIC_Python(verbose=True)
+    space_bic.fit(X)
+    print(space_bic.precision_)
+
     #space_cv = SPACECV()
     #space_cv.fit(X)
     #print(space_cv.precision_)
