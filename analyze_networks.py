@@ -57,15 +57,6 @@ def turn_dict_into_np_array(dct, company_names):
 
     return ret_arr
 
-def sort_out_date_axis():
-    plt.xticks(rotation=90)
-    ax = plt.gca()
-    for n, label in enumerate(ax.xaxis.get_ticklabels()):
-        if n % 20 != 0:
-            label.set_visible(False)
-    plt.xlabel("Dates")
-    plt.tight_layout()
-
 def count_sector_connections(G):
     """
     Counts the number of connections from one sector to the next
@@ -300,8 +291,8 @@ for sec_dict in sector_connections_lst:
 sector_nice_names = [get_sector_full_nice_name(x) for x in sectors]
 
 plt.figure()
-matplotlib.rc('xtick', labelsize=16) 
-matplotlib.rc('ytick', labelsize=16) 
+#matplotlib.rc('xtick', labelsize=16) 
+#matplotlib.rc('ytick', labelsize=16) 
 ax = sns.heatmap(sector_connections_matrix, cmap='Greys_r', xticklabels=sector_nice_names, yticklabels=sector_nice_names)
 plt.title("Sum of sector connections")
 plt.xticks(rotation=90)
@@ -328,22 +319,6 @@ plt.figure()
 ts.plot()
 plt.title("Number of edge changes")
 
-ts = pd.Series(np.divide(prec_edge_diff, number_edges[:-1]), index=dt_2)
-plt.figure()
-ts.plot()
-plt.title("Percentage edge change")
-
-ts = pd.Series(no_isolates, index=dt)
-plt.figure()
-ts.plot()
-plt.title("Number of isolates")
-
-ts = pd.Series(ls, index=dt)
-plt.figure()
-ts.plot()
-plt.title("Regularization Parameter")
-sector_centrality_over_time = collections.defaultdict(list)
-
 ts = pd.Series(sharpe_correlations, index=dt_2)
 plt.figure()
 ts.plot()
@@ -361,18 +336,13 @@ plt.title("Correlation between centrality and out of sample risk")
 ts = pd.Series(ret_correlations, index=dt_2)
 ts.plot()
 plt.title("Correlation between centrality and out of sample return")
-#ts = pd.Series(risk_correlations_pvalues, index=dt_2)
-#ts.plot(ax=ax2)
-#plt.title("Correlation between centrality and out of sample risk pvalues")
+
+sector_centrality_over_time = collections.defaultdict(list)
 
 for centrality in sector_centrality_lst: 
     s = sum(centrality.values())
-    #s = 1
     for sector in centrality:
-        if s == 0:
-            sector_centrality_over_time[sector].append(0)
-        else:
-            sector_centrality_over_time[sector].append(centrality[sector]/s)
+        sector_centrality_over_time[sector].append(centrality[sector]/s)
 
 sector_centrality = pd.DataFrame()
 for sector in sector_centrality_over_time:
@@ -382,78 +352,4 @@ for sector in sector_centrality_over_time:
 
 sector_centrality.plot(color = ['#1f77b4', '#aec7e8', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf', '#ff9896'])
 
-fig, ax1 = plt.subplots()
-
-ax2 = ax1.twinx()
-wti_df = pd.read_csv("WTI.csv")
-wti_df = wti_df.set_index("Date")
-aligned_df = wti_df.align(sector_centrality['Energy'], join='inner', axis=0)
-wti_df = aligned_df[0]
-centrality_df = aligned_df[1]
-wti_df['Price'].plot(ax=ax1, legend=False, color='#1f77b4')
-sector_centrality['Energy'].plot(ax=ax2, color='#ff7f0e')
-ax1.set_ylabel('WTI Price')
-ax2.set_ylabel('Energy Sector Centrality')
-
-cross_corr = statsmodels.tsa.stattools.ccf(wti_df['Price'], centrality_df)
-plot_bar_chart(cross_corr)
-plt.title("Cross Correlation of oil price and energy sector centrality")
-
-usd_to_eur_df = pd.read_csv("USD_EUR.csv")
-usd_to_eur_df = usd_to_eur_df.set_index("Date")
-aligned_df = usd_to_eur_df.align(sector_centrality['Energy'], join='inner', axis=0)
-usd_to_eur_df = aligned_df[0]
-centrality_df = aligned_df[1]
-
-fig, ax1 = plt.subplots()
-
-ax2 = ax1.twinx()
-usd_to_eur_df['Price'].plot(ax=ax1, legend=False, color='#1f77b4')
-sector_centrality['Energy'].plot(ax=ax2, color='#ff7f0e')
-ax1.set_ylabel('USD to EUR')
-ax2.set_ylabel('Energy Sector Centrality')
-
-cross_corr = statsmodels.tsa.stattools.ccf(usd_to_eur_df['Price'], centrality_df)
-plot_bar_chart(cross_corr)
-plt.title("Cross Correlation of USD to EUR and energy sector centrality")
-
-# Next we look at the individual nodes to see what's going only
-company_centrality = collections.defaultdict(list)
-centrality_weights = np.zeros((number_graphs, number_companies))
-
-for i,time_centrality in enumerate(node_centrality_lst):
-    tmp_dct = {}
-    for comp in time_centrality:
-        tmp_dct[comp] = abs(time_centrality[comp])
-
-    s = sum(tmp_dct.values())
-    centrality_weights[i, :] = np.array(list(tmp_dct.values()))/s
-
-    for comp in time_centrality:
-        company_centrality[comp].append(tmp_dct[comp]/s)
-
-centrality_diff = np.zeros(number_graphs-1)
-
-for i in range(number_graphs-1):
-    centrality_diff[i] = np.linalg.norm(centrality_weights[i+1, :] - centrality_weights[i, :])
-
-centrality_diff_df = pd.Series(centrality_diff, index=dt_2)
-plt.figure()
-centrality_diff_df.plot()
-plt.title("Difference in Company Centralities")
-
-company_centrality_df = pd.DataFrame(company_centrality, index=dt)
-mean_centrality = company_centrality_df.mean()
-std_centrality = company_centrality_df.std()
-ind = mean_centrality.sort_values()[::-1]
-ind = ind[0:10].index
-company_centrality_df[ind].plot()
-plt.title("10 Companies with largest mean centrality change")
-
-ind = std_centrality.sort_values()
-ind = ind[0:10].index
-company_centrality_df[ind].plot()
-plt.title("10 Companies with largest stdev centrality")
-
 save_open_figures("financial_networks_graphml_")
-#plt.show()
