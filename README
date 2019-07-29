@@ -1,0 +1,4 @@
+Code and data for my paper "Quantifying Influence in Financial Markets via Partial Correlation Network Inference" to be presented at ISPA2019. Run infer_networks.py to infer the networks, copy them to a folder "networks_bic" in the same directory and then run analyze_networks.py to reproduce the figures in the text. Any issues do feel free to contact me - tristan.millington@gmail.com
+
+There is also a Python implementation of the SPACE algorithm created by Peng et al - https://www.tandfonline.com/doi/abs/10.1198/jasa.2009.0126
+Again feel free to use this, or if you have any improvements let me know. 
