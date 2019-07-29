@@ -241,7 +241,7 @@ for i,G in enumerate(Graphs):
     # Look at the returns
     if i + 1 < number_graphs:
         X_new = X[(i+1)*slide_size:(i+2)*slide_size+window_size, :]
-        ret = np.sum(X_new, axis=0)
+        ret = np.mean(X_new, axis=0)
         risk = np.std(X_new, axis=0)
 
         sharpe = np.divide(ret, risk)
