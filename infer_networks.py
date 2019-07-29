@@ -1,20 +1,13 @@
 import pandas as pd
 import numpy as np
-from sklearn.covariance import GraphLassoCV
-from sklearn.covariance import LedoitWolf
-import matplotlib.pyplot as plt
-import collections
-import scipy
 import math
 import networkx as nx
-from scipy.stats import norm
 from sklearn.preprocessing import StandardScaler
 import space
 import os
 
 df = pd.read_csv("s_and_p_500_daily_close_filtered.csv", index_col=0)
 
-#ls = np.load("ls.npy")
 company_sectors = df.iloc[0, :].values
 company_names = df.T.index.values
 sectors = list(sorted(set(company_sectors)))
@@ -37,8 +30,6 @@ s = space.SPACE_BIC(verbose=True)
 s.fit(X_new)
 prec = s.precision_
 l = s.alpha_
-#prec = space_r.run(X, ls[0])
-#l = ls[0]
 
 np.fill_diagonal(prec, 0)
 
@@ -52,9 +43,6 @@ print("%s non-zero values" % np.count_nonzero(prec))
 
 prev_prec = prec.copy()
 
-# If we hit the maximum of minimum lambda it might be worth rerunning with a different range
-possible_reruns = []
-
 for x in range(1, no_runs):
     print("Run %s" % x)
     X_new = X[x*slide_size:(x+1)*slide_size+window_size, :]
@@ -65,11 +53,6 @@ for x in range(1, no_runs):
     prec = s.precision_
     l = s.alpha_
 
-    if l == s.alphas_.min() or l == s.alphas_.max():
-        possible_reruns.append(x)
-
-    #prec = space_r.run(X, ls[x])
-    #l = ls[x]
     np.fill_diagonal(prec, 0)
     print("%s non-zero values" % np.count_nonzero(prec))
     G=nx.from_numpy_matrix(prec)
@@ -78,5 +61,3 @@ for x in range(1, no_runs):
     nx.set_node_attributes(G, node_attributes, 'sector')
     G.graph['l'] = l
     nx.write_graphml(G, "network_over_time_%s.graphml" % x)
-
-np.save("reruns.npy", possible_reruns)
