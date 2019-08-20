@@ -179,29 +179,37 @@ class SPACE_BIC():
         else:
             self.alphas_ = alphas
 
-    def _run(self, X, l1_reg, l2_reg=0):
+    def _run(self, X, l1_reg, l2_reg_ratio=0):
+        print(l2_reg_ratio)
+        l1_inp_reg = (1-l2_reg_ratio) * l1_reg
+        l2_inp_reg = (l2_reg_ratio) * l1_reg
+        print(l1_inp_reg)
+        print(l2_inp_reg)
         if self.verbose:
-            print("Running %s" % l1_reg)
-        s = SPACE(l1_reg, l2_reg)
+            print("Running L1 = %s, L2=%s" % (l1_inp_reg, l2_inp_reg))
+
+        s = SPACE(l1_inp_reg, l2_inp_reg)
         s.fit(X)
         return s.precision_, s.sig_
 
-    def fit(self, X):
+    def fit(self, X, fit_l2_norm=False):
+        """
+        Fit the SPACE method and decide on an optimal choice of lambda using BIC
+        """
         n, p = X.shape
         rv = norm()
-        #max_l = n**(3/2) * rv.cdf(1 - (0.1/(2*p**2)))  
-        #min_l = 0.01 * max_l
-
+        X = StandardScaler().fit_transform(X)
         rerun = True
 
         min_l = 1
         max_l = 200
 
+
         while rerun:
             self.alphas_ = np.linspace(min_l, max_l)
             if self.verbose:
                 print("Lambda limits are from %s to %s" % (self.alphas_[0], self.alphas_[-1]))
-
+            
             outputs = Parallel(n_jobs=4)(delayed(self._run)(X, l, self.l2_reg) for l in self.alphas_)
             bics = []
             for prec, sig in outputs:
@@ -230,6 +238,63 @@ class SPACE_BIC():
         self.precision_ = outputs[min_err_i][0] 
         self.outputs_ = outputs       
 
+    def fit_l2(self, X):
+        """
+        Fits the SPACE method, deciding on an optimal choice of both the l1 and l2 norms using BIC
+        """
+        self.l1_ratios = np.linspace(0, 1)
+        n, p = X.shape
+        rv = norm()
+
+        rerun = True
+
+        min_l = 1
+        max_l = 200
+
+        while rerun:
+            self.alphas_ = np.linspace(min_l, max_l)
+            if self.verbose:
+                print("L1 limits are from %s to %s" % (self.alphas_[0], self.alphas_[-1]))
+            bics = {}
+            precs = {}
+            for l2_norm in self.l1_ratios:
+                print(l2_norm)
+                outputs = Parallel(n_jobs=4)(delayed(self._run)(X, l, l2_norm) for l in self.alphas_)
+                #bics = []
+                i = 0
+                for prec, sig in outputs:
+                    error = self.bic_l2(X, prec, sig, l2_norm)
+                    bics[(self.alphas_[i], l2_norm)] = error
+                    precs[(self.alphas_[i], l2_norm)] = prec
+                    i += 1 
+
+            minimum_error = min(bics, key=bics.get)
+
+
+            best_l1 = minimum_error[0]
+            best_l2 = minimum_error[1]
+            rerun = False
+            if best_l1 == self.alphas_[0]:
+                rerun = True
+                print("WARNING: lambda is at the minimum value. It might be worth rerunning with a different set of alphas")
+                min_l = min_l*0.1
+                max_l = max_l*0.1
+            
+            if best_l1 == self.alphas_[-1]:
+                rerun = True
+                print("WARNING: lambda is at the maximum value. It might be worth rerunning with a different set of alphas")
+                min_l = min_l*10
+                max_l = max_l*10
+
+        self.alpha_ = best_l1
+        self.lambda_ = best_l2
+        self.precision_ = precs[(best_l1, best_l2)]
+
+        if self.verbose:
+            print("Best lambda is at %s, %s" % (best_l1, best_l2))
+
+        #self.outputs_ = outputs     
+
     def bic(self, X, prec, sig):
         n, p = X.shape
         total_bic = 0
@@ -246,6 +311,30 @@ class SPACE_BIC():
 
             k = np.count_nonzero(prec[indices!=i, i])
             total_bic += n * np.log(residual) + np.log(n) * k
+
+        return total_bic
+
+    def bic_l2(self, X, prec, sig, l2):
+        n, p = X.shape
+        total_bic = 0
+        indices = np.arange(p)
+        for i in range(p):
+            rss_i = 0
+            predict = 0
+            vec_rss_i = 0
+            for j in range(p):
+                if i == j:
+                    continue
+                predict += prec[i, j] * np.sqrt(sig[j] / sig[i]) * X[:, j]     
+            residual = np.power(X[:, i] - predict, 2).sum()
+
+            # Find which values are nonzero
+            ind = (prec[:, i] == 0)
+            ind[i] = False
+            X_A = X[:, ind]
+            p_A = X_A.shape[1]
+            df = np.trace(X_A @ np.linalg.inv(X_A.T @ X_A + l2 * np.eye(p_A)) @ X_A.T)
+            total_bic += n * np.log(residual) + np.log(n) * df
 
         return total_bic
 
@@ -326,13 +415,13 @@ if __name__=="__main__":
     S = np.cov(X.T)
     off_diag_ind = ~np.eye(p, dtype=bool)
     max_l = n*np.abs(S[off_diag_ind]).max()
-    space = SPACE(max_l)
-    space.fit(X)
-    print(space.precision_)
-    print(space.python_solve(X))
+    #space = SPACE(max_l)
+    #space.fit(X)
+    #print(space.precision_)
+    #print(space.python_solve(X))
 
-    space_bic = SPACE_BIC_Python(verbose=True)
-    space_bic.fit(X)
+    space_bic = SPACE_BIC(verbose=True)
+    space_bic.fit_l2(X)
     print(space_bic.precision_)
 
     space_bic = SPACE_BIC(verbose=True)

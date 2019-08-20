@@ -5,6 +5,19 @@ import networkx as nx
 from sklearn.preprocessing import StandardScaler
 import space
 import os
+from sklearn.covariance import LedoitWolf
+
+def precision_matrix_to_partial_corr(theta):
+    """
+    Turns a precision matrix into a partial correlation one
+    """
+    p = theta.shape[0]
+    partial_corr = np.zeros((p, p))
+    for i in range(p):
+        for j in range(p):
+            partial_corr[i, j] = -theta[i, j] / np.sqrt(theta[i, i] * theta[j, j])
+    np.fill_diagonal(partial_corr, 1)
+    return partial_corr
 
 df = pd.read_csv("s_and_p_500_daily_close_filtered.csv", index_col=0)
 
@@ -24,12 +37,14 @@ no_runs = math.floor((no_samples - window_size)/ (slide_size))
 print("We're running %s times" % no_runs)
 
 X_new = X[0:window_size, :]
-ss = StandardScaler()
-X_new = ss.fit_transform(X_new)
-s = space.SPACE_BIC(verbose=True)
-s.fit(X_new)
-prec = s.precision_
-l = s.alpha_
+#ss = StandardScaler()
+#X_new = ss.fit_transform(X_new)
+#s = space.SPACE_BIC(verbose=True)
+#s.fit_l2(X_new)
+lw = LedoitWolf()
+lw.fit(X_new)
+prec = precision_matrix_to_partial_corr(lw.precision_)
+l = lw.shrinkage_
 
 np.fill_diagonal(prec, 0)
 
@@ -40,18 +55,24 @@ nx.set_node_attributes(G, node_attributes, 'sector')
 G.graph['l'] = l
 nx.write_graphml(G, "network_over_time_%s.graphml" % 0)
 print("%s non-zero values" % np.count_nonzero(prec))
+np.save("prec_0", lw.precision_)
+np.save("cov_0", lw.covariance_)
 
 prev_prec = prec.copy()
 
 for x in range(1, no_runs):
     print("Run %s" % x)
     X_new = X[x*slide_size:(x+1)*slide_size+window_size, :]
-    ss = StandardScaler()
-    X_new = ss.fit_transform(X_new)
-    s = space.SPACE_BIC(verbose=True)
-    s.fit(X_new)
-    prec = s.precision_
-    l = s.alpha_
+    #ss = StandardScaler()
+    #X_new = ss.fit_transform(X_new)
+    #s = space.SPACE_BIC(verbose=True)
+    #s.fit_l2(X_new)
+    lw = LedoitWolf()
+    lw.fit(X_new)
+    prec = precision_matrix_to_partial_corr(lw.precision_)
+    l = lw.shrinkage_
+    np.save("prec_%s" % x, lw.precision_)
+    np.save("cov_%s" % x, lw.covariance_)
 
     np.fill_diagonal(prec, 0)
     print("%s non-zero values" % np.count_nonzero(prec))

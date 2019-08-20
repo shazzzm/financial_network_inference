@@ -145,6 +145,8 @@ def plot_bar_chart(vals, label=None, title=None, xlabel=None, ylabel=None):
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
 
+
+
 #df = pd.DataFrame.from_csv("s_and_p_500_sector_tagged.csv")
 df = pd.read_csv("s_and_p_500_daily_close_filtered.csv", index_col=0)
 company_sectors = df.iloc[0, :].values
@@ -176,7 +178,7 @@ dates_2 = []
 for x in range(no_runs):
     dates_2.append(df.index[(x+1)*slide_size+window_size][0:10])
 
-networks_folder = "networks_bic/"
+networks_folder = "networks_lw/"
 onlyfiles = [os.path.abspath(os.path.join(networks_folder, f)) for f in os.listdir(networks_folder) if os.path.isfile(os.path.join(networks_folder, f))]
 #onlyfiles = list(map(lambda x: os.path.splitext(x)[0], onlyfiles))
 Graphs = []
@@ -209,6 +211,7 @@ prev_prec = np.zeros((p, p))
 prec_threshold_lst = []
 prec_edge_diff = np.zeros(number_graphs)
 prec_lst = []
+prev_weighted_prec = np.zeros((p, p))
 sharpe_ratios = np.zeros(number_graphs*number_companies)
 centralities = np.zeros(number_companies*number_graphs)
 risks = np.zeros(number_companies*number_graphs)
@@ -224,6 +227,12 @@ ret_correlations_pvalues = []
 for i,G in enumerate(Graphs):
     ls.append(G.graph['l'])
     prec = np.array(nx.to_numpy_matrix(G))
+
+    fro_diff = ((prec.flatten() - prev_weighted_prec.flatten())**2).mean()
+
+
+    prec_fro_diff_lst.append(fro_diff)
+    prev_weighted_prec = prec.copy()
     number_edges.append(len(G.edges()))
     node_centrality, sector_centrality = get_centrality(G)
     sector_connections = count_sector_connections(G)
@@ -259,6 +268,7 @@ for i,G in enumerate(Graphs):
         corr, pvalue = spearmanr(centrality, ret)
         ret_correlations.append(corr)
         ret_correlations_pvalues.append(pvalue)
+
 plt.figure()
 plt.scatter(centralities, sharpe_ratios)
 plt.title("Centrality Against Sharpe Ratio")
@@ -336,6 +346,11 @@ plt.title("Correlation between centrality and out of sample risk")
 ts = pd.Series(ret_correlations, index=dt_2)
 ts.plot()
 plt.title("Correlation between centrality and out of sample return")
+
+ts = pd.Series(prec_fro_diff_lst[1:], index=dt_2)
+plt.figure()
+ts.plot()
+plt.title("Frobenius Norm Difference")
 
 sector_centrality_over_time = collections.defaultdict(list)
 
