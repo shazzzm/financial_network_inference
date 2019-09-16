@@ -13,8 +13,129 @@ from pathlib import Path
 import operator
 import matplotlib
 import statsmodels.tsa.stattools
+from sklearn.preprocessing import StandardScaler
+import modularity_maximizer
+from statsmodels.stats import multitest
+
+def find_node_furthest_away(G, nodeset):
+    """
+    Finds the node that is furthest away in the graph from
+    the nodes in the set
+    """
+    max_dist = -np.inf
+    max_dist_node = None
+
+    for node in G:
+        if node in nodeset:
+            continue
+        # Find the total distance from the nodes in nodeset to node
+        dist = 0
+        for node2 in nodeset:
+            dist += G[node][node2]['weight']
+
+        if dist > max_dist:
+            max_dist = dist
+            max_dist_node = node
+
+    return max_dist_node
+ 
+def find_node_closest(G, nodeset):
+    """
+    Finds the node that is closest in the graph to
+    the nodes in the set
+    """
+    min_dist = np.inf
+    min_dist_node = None
+
+    for node in G:
+        if node in nodeset:
+            continue
+        # Find the total distance from the nodes in nodeset to node
+        dist = 0
+        for node2 in nodeset:
+            dist += G[node][node2]['weight']
+
+        if dist < min_dist:
+            min_dist = dist
+            min_dist_node = node
+
+    return min_dist_node
+
+def pick_portfolio_far_away(G, portfolio_size=5):
+    """
+    Picks portfolios of stocks that are far away from each other 
+    using a greedy algorithm
+    """
+    new_G = remap_G_to_distance(G)
+    portfolios = []
+    for node in new_G.nodes():
+        portfolio = set([node])
+
+        while len(portfolio) < portfolio_size:
+            portfolio.add(find_node_furthest_away(new_G, portfolio))
+
+        portfolios.append(portfolio)
+
+    return portfolios
+
+def pick_portfolio_close(G, portfolio_size=5):
+    """
+    Picks portfolios of stocks that are close together using a 
+    greedy algorithm
+    """
+    new_G = remap_G_to_distance(G)
+    portfolios = []
+    for node in new_G.nodes():
+        portfolio = set([node])
+
+        while len(portfolio) < portfolio_size:
+            portfolio.add(find_node_closest(new_G, portfolio))
+
+        portfolios.append(portfolio)
+
+    return portfolios
+
+def remap_G_to_distance(G):
+    """
+    Returns a new graph of edge distances from a correlation/partial correlation
+    graph
+    """
+    new_G = G.copy()
+
+    for edge in G.edges():
+        weight = G.edges()[edge]['weight']
+        new_weight = np.sqrt(2 * (1 - weight))
+        new_G.edges[edge]['weight'] = new_weight
+
+    return new_G
+
+def select_portfolios_by_sharpe_ratio(portfolios, X, num_to_select=5):
+    """
+    Selects a set of portfolios that have the highest sharpe ratio on the current window
+    """
+    portfolio_sharpes = np.zeros(len(portfolios))
+    for i,portfolio in enumerate(portfolios):
+        portfolio = np.array(list(portfolio))
+        num_stocks = portfolio.shape[0]
+        weights = np.ones(num_stocks)/num_stocks
+        ind = np.zeros(portfolio.shape, dtype=int)
+        for k in range(portfolio.shape[0]):
+            ind[k] = np.where(company_names == portfolio[k])[0]
+        portfolio_returns = X[:, ind] @ weights
+        mean_return = np.mean(portfolio_returns)
+        stdev_return = np.std(portfolio_returns)
+
+        portfolio_sharpes[i] = mean_return/stdev_return
+
+    #ind = np.argsort(portfolio_sharpes)
+    return portfolio_sharpes
+
 
 def get_centrality(G):
+    """
+    Calculates the centrality of each node and mean centrality of a sector by
+    summing the absolute values of each
+    """
     node_centrality = collections.defaultdict(int)
     total = 0
     # Calculate the weighted edge centrality
@@ -102,6 +223,7 @@ def threshold_matrix(M, threshold):
     A[high_value_indices] = 1
     return A
 
+
 def get_sector_full_nice_name(sector):
     """
     Returns a short version of the sector name
@@ -145,7 +267,14 @@ def plot_bar_chart(vals, label=None, title=None, xlabel=None, ylabel=None):
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
 
+def min_max_normalization(df):
+    return (df - df.min())/(df.max() - df.min())
 
+def find_far_away_nodes(G):
+    """
+    Finds nodes that are anticorrelated with each other
+    """
+    pass
 
 #df = pd.DataFrame.from_csv("s_and_p_500_sector_tagged.csv")
 df = pd.read_csv("s_and_p_500_daily_close_filtered.csv", index_col=0)
@@ -178,8 +307,9 @@ dates_2 = []
 for x in range(no_runs):
     dates_2.append(df.index[(x+1)*slide_size+window_size][0:10])
 
-networks_folder = "networks_lw/"
+networks_folder = "networks_corr_lw/"
 onlyfiles = [os.path.abspath(os.path.join(networks_folder, f)) for f in os.listdir(networks_folder) if os.path.isfile(os.path.join(networks_folder, f))]
+#onlyfiles = onlyfiles[0:1]
 #onlyfiles = list(map(lambda x: os.path.splitext(x)[0], onlyfiles))
 Graphs = []
 
@@ -216,6 +346,7 @@ sharpe_ratios = np.zeros(number_graphs*number_companies)
 centralities = np.zeros(number_companies*number_graphs)
 risks = np.zeros(number_companies*number_graphs)
 ls = []
+edge_weights = []
 
 sharpe_correlations = []
 sharpe_correlations_pvalues = []
@@ -224,16 +355,23 @@ risk_correlations_pvalues = []
 ret_correlations = []
 ret_correlations_pvalues = []
 
+max_eigs = np.zeros(no_runs)
+
+far_away_portfolio_sharpes = np.zeros(0)
+close_portfolio_sharpes = np.zeros(0)
+naive_portfolio_sharpes = []
+
+mean_absolute_value = np.zeros(no_runs)
+
 for i,G in enumerate(Graphs):
     ls.append(G.graph['l'])
     prec = np.array(nx.to_numpy_matrix(G))
-
+    eigs = scipy.linalg.eigh(prec, eigvals=(p-1, p-1))[0][0]
+    max_eigs[i] = eigs
     fro_diff = ((prec.flatten() - prev_weighted_prec.flatten())**2).mean()
-
 
     prec_fro_diff_lst.append(fro_diff)
     prev_weighted_prec = prec.copy()
-    number_edges.append(len(G.edges()))
     node_centrality, sector_centrality = get_centrality(G)
     sector_connections = count_sector_connections(G)
     sector_centrality_lst.append(sector_centrality)
@@ -241,11 +379,16 @@ for i,G in enumerate(Graphs):
     no_isolates.append(len(list(nx.isolates(G))))
     sector_connections_lst.append(sector_connections)
     prec_lst.append(np.abs(prec))
-    prec_thresh = threshold_matrix(prec, 0.0001)
-    diff = np.count_nonzero(prec_thresh - prev_prec)
-    prec_edge_diff[i] = diff
-    prev_prec = prec_thresh
-    prec_threshold_lst.append(prec_thresh)
+
+    mean_absolute_value[i] = np.abs(prec).mean()
+    edge_weights.append(prec.flatten())
+
+    #far_away_portfolio_nodes = pick_portfolio_far_away(G)
+    #close_portfolio_nodes = pick_portfolio_close(G)
+
+    # Assess how the portfolios perform in this window to make a selection
+    #far_away_portfolio_sharpes = np.concatenate((far_away_portfolio_sharpes, select_portfolios_by_sharpe_ratio(far_away_portfolio_nodes, X)))
+    #close_portfolio_sharpes = np.concatenate((close_portfolio_sharpes, select_portfolios_by_sharpe_ratio(close_portfolio_nodes, X)))
 
     # Look at the returns
     if i + 1 < number_graphs:
@@ -269,6 +412,40 @@ for i,G in enumerate(Graphs):
         ret_correlations.append(corr)
         ret_correlations_pvalues.append(pvalue)
 
+        weight_naive = np.ones(p)/p
+        ret_naive = X_new @ weight_naive
+        risk_naive = np.std(ret_naive)
+        ret_naive = np.mean(ret_naive)
+
+        naive_portfolio_sharpes.append(ret_naive/risk_naive)
+        """
+        for portfolio in far_away_portfolio_nodes:
+            portfolio = np.array(list(portfolio))
+            num_stocks = portfolio.shape[0]
+            weights = np.ones(num_stocks)/num_stocks
+            ind = np.zeros(portfolio.shape, dtype=int)
+            for k in range(portfolio.shape[0]):
+                ind[k] = np.where(company_names == portfolio[k])[0]
+            portfolio_returns = X_new[:, ind] @ weights
+            mean_return = np.mean(portfolio_returns)
+            stdev_return = np.std(portfolio_returns)
+
+            far_away_portfolio_sharpes.append(mean_return/stdev_return)
+
+
+        for portfolio in close_portfolio_nodes:
+            portfolio = np.array(list(portfolio))
+            num_stocks = portfolio.shape[0]
+            weights = np.ones(num_stocks)/num_stocks
+            ind = np.zeros(portfolio.shape, dtype=int)
+            for k in range(portfolio.shape[0]):
+                ind[k] = np.where(company_names == portfolio[k])[0]
+            portfolio_returns = X_new[:, ind] @ weights
+            mean_return = np.mean(portfolio_returns)
+            stdev_return = np.std(portfolio_returns)
+
+            close_portfolio_sharpes.append(mean_return/stdev_return)
+        """
 plt.figure()
 plt.scatter(centralities, sharpe_ratios)
 plt.title("Centrality Against Sharpe Ratio")
@@ -307,32 +484,21 @@ ax = sns.heatmap(sector_connections_matrix, cmap='Greys_r', xticklabels=sector_n
 plt.title("Sum of sector connections")
 plt.xticks(rotation=90)
 
-number_edges = np.array(number_edges)
-edges_changes = np.diff(number_edges)
-prec_edge_diff = prec_edge_diff[1:]
 
 dt = pd.to_datetime(dates_2)
-ts = pd.Series(number_edges, index=dt)
-fig = plt.figure()
-ts.plot()
-plt.title("Number of edges")
-
-#What is the difference between these?
 dt_2 = pd.to_datetime(dates)
-ts = pd.Series(edges_changes, index=dt_2)
+
+ts = pd.Series(mean_absolute_value, index=dt)
 fig = plt.figure()
 ts.plot()
-plt.title("Changes in number of edges")
+plt.title("Mean Absolute Value")
 
-ts = pd.Series(prec_edge_diff, index=dt_2)
-plt.figure()
-ts.plot()
-plt.title("Number of edge changes")
 
 ts = pd.Series(sharpe_correlations, index=dt_2)
 plt.figure()
-ts.plot()
+ax1 = ts.plot()
 plt.title("Correlation between centrality and out of sample Sharpe ratio")
+ax1.set_ylim(-0.5, 0.5)
 
 ts = pd.Series(sharpe_correlations_pvalues, index=dt_2)
 plt.figure()
@@ -350,7 +516,18 @@ plt.title("Correlation between centrality and out of sample return")
 ts = pd.Series(prec_fro_diff_lst[1:], index=dt_2)
 plt.figure()
 ts.plot()
-plt.title("Frobenius Norm Difference")
+plt.title("Mean Squared Edge Difference")
+
+ts = pd.Series(max_eigs, index=dt)
+plt.figure()
+ts.plot()
+plt.title("Largest Eigenvalue")
+
+plt.figure()
+plt.hist(edge_weights)
+plt.title("Edge Weight Distribution")
+ax = plt.gca()
+ax.set_ylim(0, 85000)
 
 sector_centrality_over_time = collections.defaultdict(list)
 
@@ -367,4 +544,50 @@ for sector in sector_centrality_over_time:
 
 sector_centrality.plot(color = ['#1f77b4', '#aec7e8', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf', '#ff9896'])
 
+macro_df = pd.read_csv('macroeconomic_variables.csv', index_col=0)
+macro_df.index = pd.to_datetime(macro_df.index)
+#sector_centrality_aligned = sector_centrality.resample('1M', convention='start').asfreq().dropna()  
+
+sector_centrality_aligned = sector_centrality.to_period('M')
+macro_df = macro_df.to_period('M')
+
+# Pandas won't behave and calculate the correlation by itself, so we have to do it manually
+corr_dct = collections.defaultdict(dict)
+p_dct = collections.defaultdict(dict)
+for var in macro_df:
+    vals = macro_df[var]
+    for sector in sector_centrality_aligned:
+        vals2 = sector_centrality_aligned[sector].dropna()
+        new_df = pd.DataFrame()
+        new_df[var] = vals
+        new_df[sector] = vals2
+        new_df = new_df.dropna()
+        Y = new_df.values
+        corr, p = spearmanr(Y[:, 0], Y[:, 1])
+        corr_dct[var][sector] = corr    
+        p_dct[var][sector] = p     
+        
+corr_df = pd.DataFrame()
+p_df = pd.DataFrame()
+for key in corr_dct:
+    corr_df[key] = pd.Series(corr_dct[key])
+
+for key in p_dct:
+    p_df[key] = pd.Series(p_dct[key])
+
+print(multitest.multipletests(p_df, method='bonferroni'))
+
+corr_df[p_df > 0.05] = 0  
+
+ax = sns.heatmap(
+    corr_df, 
+    vmin=-1, vmax=1, center=0,
+    cmap=sns.diverging_palette(20, 220, n=200),
+    square=True
+)
+
+plt.figure()
+plt.boxplot([close_portfolio_sharpes, far_away_portfolio_sharpes, naive_portfolio_sharpes], labels=['Close Portfolios', 'Far Away Portfolios', 'Naive Sharpes'])
+
 save_open_figures("financial_networks_graphml_")
+plt.close('all')

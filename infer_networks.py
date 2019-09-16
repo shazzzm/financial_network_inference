@@ -6,6 +6,7 @@ from sklearn.preprocessing import StandardScaler
 import space
 import os
 from sklearn.covariance import LedoitWolf
+import matplotlib.pyplot as plt
 
 def precision_matrix_to_partial_corr(theta):
     """
@@ -18,6 +19,18 @@ def precision_matrix_to_partial_corr(theta):
             partial_corr[i, j] = -theta[i, j] / np.sqrt(theta[i, i] * theta[j, j])
     np.fill_diagonal(partial_corr, 1)
     return partial_corr
+
+def covariance_matrix_to_corr(cov):
+    """
+    Turns a covariance matrix into a correlation one
+    """
+    p = cov.shape[0]
+    corr = np.zeros((p, p))
+    for i in range(p):
+        for j in range(p):
+            corr[i, j] = cov[i, j] / np.sqrt(cov[i, i] * cov[j, j])
+    np.fill_diagonal(corr, 1)
+    return corr
 
 df = pd.read_csv("s_and_p_500_daily_close_filtered.csv", index_col=0)
 
@@ -47,8 +60,9 @@ prec = precision_matrix_to_partial_corr(lw.precision_)
 l = lw.shrinkage_
 
 np.fill_diagonal(prec, 0)
-
-G=nx.from_numpy_matrix(prec)
+corr = covariance_matrix_to_corr(lw.covariance_)
+np.fill_diagonal(corr, 0)
+G=nx.from_numpy_matrix(corr)
 G=nx.relabel_nodes(G, dict(zip(G.nodes(), company_names)))
 node_attributes = dict(zip(company_names[list(range(len(company_sectors)))], company_sectors))
 nx.set_node_attributes(G, node_attributes, 'sector')
@@ -56,8 +70,12 @@ G.graph['l'] = l
 nx.write_graphml(G, "network_over_time_%s.graphml" % 0)
 print("%s non-zero values" % np.count_nonzero(prec))
 np.save("prec_0", lw.precision_)
-np.save("cov_0", lw.covariance_)
 
+par_corr_values = []
+corr_values = []
+
+corr_values.append(corr.flatten())
+par_corr_values.append(prec.flatten())
 prev_prec = prec.copy()
 
 for x in range(1, no_runs):
@@ -70,15 +88,29 @@ for x in range(1, no_runs):
     lw = LedoitWolf()
     lw.fit(X_new)
     prec = precision_matrix_to_partial_corr(lw.precision_)
+    corr = covariance_matrix_to_corr(lw.covariance_)
+    np.fill_diagonal(corr, 0)
+
     l = lw.shrinkage_
     np.save("prec_%s" % x, lw.precision_)
-    np.save("cov_%s" % x, lw.covariance_)
 
     np.fill_diagonal(prec, 0)
+
+    corr_values.append(corr.flatten())
+    par_corr_values.append(prec.flatten())
     print("%s non-zero values" % np.count_nonzero(prec))
-    G=nx.from_numpy_matrix(prec)
+    G=nx.from_numpy_matrix(corr)
     G=nx.relabel_nodes(G, dict(zip(G.nodes(), company_names)))
     node_attributes = dict(zip(company_names[list(range(len(company_sectors)))], company_sectors))
     nx.set_node_attributes(G, node_attributes, 'sector')
     G.graph['l'] = l
     nx.write_graphml(G, "network_over_time_%s.graphml" % x)
+
+plt.figure()
+plt.hist(corr_values)
+plt.title("Correlation Values")
+
+plt.figure()
+plt.hist(par_corr_values)
+plt.title("Partial Correlation Values")
+plt.show()

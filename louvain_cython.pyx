@@ -5,7 +5,7 @@ DTYPE = np.double
 ctypedef np.double_t DTYPE_t
 ctypedef np.int_t DTYPE_int
 
-def modularity_classic(np.ndarray[DTYPE_t, ndim=2] M, np.ndarray[DTYPE_int, ndim=1] assigments):
+def modularity_classic(np.ndarray[DTYPE_t, ndim=2] M, np.ndarray[DTYPE_int, ndim=1] assignments):
     """
     Calculates the modularity of an unsigned weighted network
     Parameters
@@ -27,7 +27,7 @@ def modularity_classic(np.ndarray[DTYPE_t, ndim=2] M, np.ndarray[DTYPE_int, ndim
         for j in range(p):
             if i == j:
                 continue
-            if assigments[i] != assigments[j]:
+            if assignments[i] != assignments[j]:
                 continue
 
             Q += M[i,j] - ((K[i] * K[j])/C_norm)
@@ -35,7 +35,7 @@ def modularity_classic(np.ndarray[DTYPE_t, ndim=2] M, np.ndarray[DTYPE_int, ndim
     return Q/(C_norm)
 
 
-def modularity_signed(np.ndarray[DTYPE_t, ndim=2] M, np.ndarray[DTYPE_int, ndim=1] assigments):
+def modularity_signed(np.ndarray[DTYPE_t, ndim=2] M, np.ndarray[DTYPE_int, ndim=1] assignments):
     """
     Calculates the modularity of a signed weighted network
     Parameters
@@ -56,9 +56,6 @@ def modularity_signed(np.ndarray[DTYPE_t, ndim=2] M, np.ndarray[DTYPE_int, ndim=
     M_neg[M_neg > 0] = 0
     M_neg = - M_neg
 
-    w_pos = np.count_nonzero(M_pos)
-    w_neg = np.count_nonzero(M_neg)
-
     K_pos = M_pos.sum(axis=0)
     K_neg = M_neg.sum(axis=0)
 
@@ -66,22 +63,88 @@ def modularity_signed(np.ndarray[DTYPE_t, ndim=2] M, np.ndarray[DTYPE_int, ndim=
     tot_neg = M_neg.sum()
 
     Q_pos = 0
-    for i in range(p):
-        for j in range(p):
-            if assigments[i] == assigments[j]:
-                Q_pos += M_pos[i, j] - (K_pos[i] * K_pos[j]/tot_pos)
+    if tot_pos > 0:
+        for i in range(p):
+            for j in range(p):
+                if assignments[i] == assignments[j]:
+                    Q_pos += M_pos[i, j] - (K_pos[i] * K_pos[j]/tot_pos)
 
     Q_neg = 0
-    for i in range(p):
-        for j in range(p):
-            if assigments[i] == assigments[j]:
-                Q_neg += M_neg[i, j] - (K_neg[i] * K_neg[j]/tot_pos)
+    if tot_neg > 0:
+        for i in range(p):
+            for j in range(p):
+                if assignments[i] == assignments[j]:
+                    Q_neg += M_neg[i, j] - (K_neg[i] * K_neg[j]/tot_neg)
+
 
     Q = tot_pos / (tot_pos + tot_neg) * Q_pos + tot_neg / (tot_pos + tot_neg) * Q_neg
 
     return Q
 
-def louvain_modularity_diff(np.ndarray[DTYPE_t, ndim=2] M, int i, np.ndarray[DTYPE_int, ndim=1] assignments, int community):
+def modularity_diff_correlation(np.ndarray[DTYPE_t, ndim=2] M, int i, np.ndarray[DTYPE_int, ndim=1] assignments, int community):
+    """
+    Calculates the gain in modularity of taking node i from an isolated community
+    into the community specified for the null model of a correlation
+    network
+
+    Parameters
+    ----------
+    M : array_like
+        p by p adjacency matrix representing the graph
+    i : integer
+        index of the node being moved
+    assignments : array_like
+        p length vector containing node community assignments
+    community : integer
+        index of the community node i is being moved into
+    Returns
+    -------
+    modularity_diff : float
+        change in modularity
+    Notes
+    -----
+    i must not be assigned to a community in the community vector - assign it to -1 community
+    """
+    ind = assignments == community
+    m = M.sum()
+
+    # Avoid a NaN
+    if m == 0:
+        return 0
+
+    return M[i, ind].sum()/m
+
+def modularity_correlation(np.ndarray[DTYPE_t, ndim=2] M, int i, np.ndarray[DTYPE_int, ndim=1] assignments):
+    """
+    Calculates the modularity of a correlation network
+    Parameters
+    ----------
+    M : array_like
+        p by p adjacency matrix representing the graph
+    assignments : array_like
+        p length vector containing node community assignments
+    Returns
+    -------
+    modularity : float
+        Value of the modularity
+    """
+    cdef int p = M.shape[0]
+    K = M.sum(axis=0)
+    cdef float Q = 0
+    cdef float C_norm = M.sum()
+    for i in range(p):
+        for j in range(p):
+            if i == j:
+                continue
+            if assignments[i] != assignments[j]:
+                continue
+
+            Q += M[i,j]
+
+    return Q/(C_norm)
+
+
+def modularity_diff(np.ndarray[DTYPE_t, ndim=2] M, int i, np.ndarray[DTYPE_int, ndim=1] assignments, int community):
     """
     Calculates the gain in modularity of taking node i from an isolated community into
     the community specified for an unsigned weighted graph
@@ -98,21 +161,26 @@ def louvain_modularity_diff(np.ndarray[DTYPE_t, ndim=2] M, int i, np.ndarray[DTY
         index of the community node i is being moved into
     Returns
     -------
-    assignments : array_like
-        p length vector with what community a node has been assigned to
+    modularity_diff : float
+        change in modularity
     Notes
     -----
     i must not be assigned to a community in the community vector - assign it to -1 community
     """
     ind = assignments == community
     m = M.sum()
+
+    # Avoid a NaN
+    if m == 0:
+        return 0
+
     sum_in = M[ind, :][:, ind].sum()/2
     sum_tot = M[ind, :].sum()
     k_i = M[i, :].sum()
     k_in = M[i, ind].sum()
     return (sum_in + 2 * k_in)/(m) - ((sum_tot + k_i)/(m))**2 - sum_in/(m) + (sum_tot/(m))**2 + (k_i/(m))**2
 
-def louvain_modularity_diff_signed(np.ndarray[DTYPE_t, ndim=2] M_pos, np.ndarray[DTYPE_t, ndim=2] M_neg, int i, np.ndarray[DTYPE_int, ndim=1] assignments, int community):
+def modularity_diff_signed(np.ndarray[DTYPE_t, ndim=2] M_pos, np.ndarray[DTYPE_t, ndim=2] M_neg, int i, np.ndarray[DTYPE_int, ndim=1] assignments, int community):
     """
     Calculates the gain in modularity of taking node i from an isolated community into
     the community specified for a signed weighted graph
@@ -129,21 +197,21 @@ def louvain_modularity_diff_signed(np.ndarray[DTYPE_t, ndim=2] M_pos, np.ndarray
         index of the community node i is being moved into
     Returns
     -------
-    assignments : array_like
-        p length vector with what community a node has been assigned to
+    modularity_diff : float
+        change in modularity
     Notes
     -----
     i must not be assigned to a community in the community vector - assign it to -1 community
     """
-    pos_gain = louvain_modularity_diff(M_pos, i, assignments, community)
-    neg_gain = louvain_modularity_diff(M_neg, i, assignments, community)
+    pos_gain = modularity_diff(M_pos, i, assignments, community)
+    neg_gain = modularity_diff(M_neg, i, assignments, community)
 
     w_pos = M_pos.sum()
     w_neg = M_neg.sum()
 
     return (w_pos / (w_pos + w_neg)) * pos_gain - (w_neg / (w_pos + w_neg)) * neg_gain
 
-def run_one_level(np.ndarray[DTYPE_t, ndim=2] M, int signed=False):
+def run_one_level(np.ndarray[DTYPE_t, ndim=2] M, int signed=False, int correlation=False):
     """
     Runs the first phase of the Louvain community detection algorithm for a weighted graph, returns a set of assignments
     for each node of the graph. 
@@ -152,15 +220,17 @@ def run_one_level(np.ndarray[DTYPE_t, ndim=2] M, int signed=False):
     ----------
     M : array_like
         p by p adjacency matrix representing the graph
-    signed : bool (optinal, default=True)
+    signed : bool (optional, default=False)
         If the graph is signed or not
+    correlation : bool (optional, default=False)
+        If the graph is a correlation network
     Returns
     -------
     assignments : array_like
         p length vector with what community a node has been assigned to
     """
     cdef int p = M.shape[0]
-    assigments = np.arange(p)
+    assignments = np.arange(p)
     communities = set(range(p))
     #run = True
     # we use this to count how many nodes we've gone without
@@ -188,47 +258,60 @@ def run_one_level(np.ndarray[DTYPE_t, ndim=2] M, int signed=False):
             ind = nodes[i]
             max_diff_i = -1
             max_diff = 0
-            connected_to = M[ind, :] > 0
-            communities_to_consider_set = list(set(assigments[connected_to]))
+            connected_to = M[ind, :] != 0
+            communities_to_consider_set = list(set(assignments[connected_to]))
             communities_to_consider = np.random.choice(communities_to_consider_set, size=len(communities_to_consider_set))
 
-            old_com = assigments[ind]
+            old_com = assignments[ind]
 
             # Remove the node from it's community
-            assigments[ind] = -1
+            assignments[ind] = -1
 
-            if not signed:
-                removal_cost = -louvain_modularity_diff(M, ind, assigments, old_com)
+            if signed:
+                removal_cost = -modularity_diff_signed(M_pos, M_neg, ind, assignments, old_com)
+            elif correlation:
+                removal_cost = -modularity_diff_correlation(M, ind, assignments, old_com)
             else:
-                removal_cost = -louvain_modularity_diff_signed(M_pos, M_neg, ind, assigments, old_com)
+                removal_cost = -modularity_diff(M, ind, assignments, old_com)
+                #assignments[ind] = old_com
+                #old_mod = modularity_signed(M, assignments)
+                #assignments[ind] = -1
+
             run_through_modified = False
             for com in communities_to_consider:
-                if not signed:
-                    change = louvain_modularity_diff(M, ind, assigments, com)
+                if signed:
+                    change = modularity_diff_signed(M_pos, M_neg, ind, assignments, com)
+                elif correlation:
+                    change = modularity_diff_correlation(M, ind, assignments, old_com)
                 else:
-                    change = louvain_modularity_diff_signed(M_pos, M_neg, ind, assigments, com)
-                diff = removal_cost + change
+                    change = modularity_diff(M, ind, assignments, com)
+
+                    #assignments[ind] = com
+                    #new_mod = modularity_signed(M, assignments)
+                    #assignments[ind] = -1
+
+                diff = change + removal_cost
                 if max_diff < diff:
                     max_diff = diff
                     max_diff_i = com
             if max_diff > 0 and max_diff_i != -1:
                 no_not_updated = 0
                 modified = True
-                assigments[ind] = max_diff_i
+                assignments[ind] = max_diff_i
             else:
                 # If there isn't a better community to put it in, put it back
                 no_not_updated += 1
-                assigments[ind] = old_com
+                assignments[ind] = old_com
 
-    communites = {com:i for i,com in enumerate(set(assigments))}
+    communites = {com:i for i,com in enumerate(set(assignments))}
 
     # remap communities into a range from 0-number of communities
     for i in range(p):
-        assigments[i] = communites[assigments[i]]
+        assignments[i] = communites[assignments[i]]
 
-    return assigments
+    return assignments
 
-def induced_graph(np.ndarray[DTYPE_t, ndim=2] M, np.ndarray[DTYPE_int, ndim=1] assigments, labels, first):
+def induced_graph(np.ndarray[DTYPE_t, ndim=2] M, np.ndarray[DTYPE_int, ndim=1] assignments, labels, first):
     """
     Folds all the communities into their own node - phase 2 of the Louvain algorithm
 
@@ -251,7 +334,7 @@ def induced_graph(np.ndarray[DTYPE_t, ndim=2] M, np.ndarray[DTYPE_int, ndim=1] a
         which nodes each community belongs to
     """
     p = M.shape[0]
-    communities = list(set(assigments))
+    communities = list(set(assignments))
     no_communities = len(communities)
     new_M = np.zeros((no_communities, no_communities))
     # Folded contains the nodes that the community contains
@@ -259,7 +342,7 @@ def induced_graph(np.ndarray[DTYPE_t, ndim=2] M, np.ndarray[DTYPE_int, ndim=1] a
     if first:
         labels = np.array(labels)
     for i,com in enumerate(communities):
-        ind = assigments == com
+        ind = assignments == com
         # Get all the connections within the community
         self_weight = M[ind, :][:, ind].sum()
         new_M[i, i] = self_weight
@@ -274,7 +357,7 @@ def induced_graph(np.ndarray[DTYPE_t, ndim=2] M, np.ndarray[DTYPE_int, ndim=1] a
         for j,com_2 in enumerate(communities):
             if com == com_2:
                 continue
-            ind_2 = assigments == com_2
+            ind_2 = assignments == com_2
             #M_com = M.copy()
             M_com = M[ind, :]
             M_com = M_com[:, ind_2]
@@ -284,7 +367,7 @@ def induced_graph(np.ndarray[DTYPE_t, ndim=2] M, np.ndarray[DTYPE_int, ndim=1] a
 
     return new_M, folded
     
-def run_louvain_nx(G, int max_iter=5, int signed=False):
+def run_louvain_nx(G, nodes=None, int max_iter=5, int signed=False, int correlation=False):
     """
     Runs the Louvain community detection algorithm on a networkx graph
     Parameters
@@ -297,6 +380,8 @@ def run_louvain_nx(G, int max_iter=5, int signed=False):
         Description of what a does
     signed : bool (optional, default=False)
         If the graph is signed or not
+    correlation : bool (optinal, default=False)
+        If the graph is a correlation network
 
     Returns
         tuple (dict, dict)
@@ -307,17 +392,27 @@ def run_louvain_nx(G, int max_iter=5, int signed=False):
     assignments_dct = {}
     i = 0
     new_G = G.copy()
-    node_labels = list(new_G.nodes())
     old_mod = -np.inf
     assignments_dct = {}
+
+    if correlation and signed:
+        raise ValueError("Both correlation and signed cannot be true")
+
+    if nodes is None:
+        node_labels = list(G.nodes())
+    else:
+        node_labels = nodes
+
     while True:
-        M = nx.to_numpy_array(new_G)
-        assignments = run_one_level(M, signed=signed)
+        M = nx.to_numpy_array(new_G)#, nodelist=nodes)
+        assignments = run_one_level(M, signed=signed, correlation=correlation)
         # Fold them into an induced graph
 
         M, node_labels = induced_graph(M, assignments, node_labels, i==0)
         if signed:
             mod = modularity_signed(M, assignments)
+        elif correlation:
+            mod = modularity_correlation(M, assignments)
         else:
             mod = modularity_classic(M, assignments)
         new_G = nx.from_numpy_array(M)

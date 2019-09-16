@@ -68,13 +68,14 @@ dt = pd.to_datetime(dates)
 
 for i,G in enumerate(matrices):
     X_new = X[i*slide_size:, :]
+    X_new = X_new - X_new.mean(0)
     new_n = X_new.shape[0]
     prec = matrices[i]
     res_norms = np.zeros(p)
     reses = np.zeros((new_n, p))
     for j in range(p):
         X_hat = predict_from_precision_matrix(X_new, prec, j)
-        res = X_new[:, j] - X_hat
+        res = np.divide(X_new[:, j] - X_hat, X_new[:, j])
         res_norms[j] = np.linalg.norm(res)
         reses[:, j] = res
 
